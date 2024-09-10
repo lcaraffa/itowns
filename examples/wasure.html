@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Itowns - 3d-tiles example</title>
+
+        <meta charset="UTF-8">
+        <link rel="stylesheet" type="text/css" href="css/example.css">
+        <link rel="stylesheet" type="text/css" href="css/LoadingScreen.css">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.6/dat.gui.min.js"></script>
+    </head>
+    <body>
+        <div id="viewerDiv"></div>
+        <div id="description">
+            <p><b>Feature Information:</b></p>
+            <div id="featureInfo"></div>
+        </div>
+        <script src="js/GUI/GuiTools.js"></script>
+        <script src="../dist/itowns.js"></script>
+        <script src="js/GUI/LoadingScreen.js"></script>
+        <script src="../dist/debug.js"></script>
+        <script src="js/3dTilesHelper.js"></script>
+        <script type="text/javascript">
+            /* global itowns,document,GuiTools*/
+            var placement = {
+                coord: new itowns.Coordinates('EPSG:4326', 2.12,48.805 , 0),
+                range: 4000,
+                tilt: 45,
+                heading: 180
+            }
+            // iTowns namespace defined here
+            var viewerDiv = document.getElementById('viewerDiv');
+
+            var view = new itowns.GlobeView(viewerDiv, placement);
+            view.camera3D.near = 5;
+            setupLoadingScreen(viewerDiv, view);
+
+            var menuGlobe = new GuiTools('menuDiv', view, 300);
+
+            itowns.Fetcher.json('./layers/JSONLayers/OPENSM.json').then(function _(config) {
+                config.source = new itowns.TMSSource(config.source);
+                var layer = new itowns.ColorLayer('Ortho', config);
+                view.addLayer(layer).then(menuGlobe.addLayerGUI.bind(menuGlobe));
+            });
+
+            // Create a new Layer 3d-tiles For DiscreteLOD
+            // -------------------------------------------
+            var $3dTilesLayerDiscreteLOD = new itowns.C3DTilesLayer('3d-tiles-discrete-lod', {
+                name: 'DiscreteLOD',
+                sseThreshold: 30,
+                source: new itowns.C3DTilesSource({
+                    url: '/versaille/tileset.json',
+                }),
+            }, view);
+
+            itowns.View.prototype.addLayer.call(view, $3dTilesLayerDiscreteLOD);
+
+
+	  // ---------- Add lights to the scene : ----------
+	  const directionalLight = new itowns.THREE.DirectionalLight(0xffffff, 1);
+	  directionalLight.position.set(-0.9, 0.3, 1);
+	  directionalLight.updateMatrixWorld();
+	  view.scene.add(directionalLight);
+
+	  const ambientLight = new itowns.THREE.AmbientLight(0xffffff, 1);
+	  view.scene.add(ambientLight);
+
+
+	  // ---------- Select camera positions and travel through these positions : ----------
+
+            // THREE.Group which stores picked camera positions markers.
+            let cameraHelpers = new itowns.THREE.Group();
+            cameraHelpers.visible = false;
+            view.scene.add(cameraHelpers);
+
+            // Array which stores successive camera transform options (headings, tilts, ranges...
+            // see CameraTransformOptions doc at http://www.itowns-project.org/itowns/docs/#api/Controls/CameraUtils)
+            let travelSteps = [];
+            // Boolean which states if the camera is performing a travel animation or not
+            let travelOn = false;
+
+            function saveCurrentCameraTransformOptions() {
+                // Retrieve current camera transform options
+                const cameraTransformOptions = itowns.CameraUtils.getTransformCameraLookingAtTarget(
+                    view,
+                    view.camera3D,
+                );
+                // Change default easing parameter for animation speed
+                // (see https://sole.github.io/tween.js/examples/03_graphs.html)
+                cameraTransformOptions.easing = itowns.CameraUtils.Easing.Quadratic.InOut;
+
+                // Add the camera transform options to the travel step array
+                travelSteps.push(cameraTransformOptions);
+
+                // Create a CameraHelper (https://threejs.org/docs/index.html?q=Camera#api/en/helpers/CameraHelper) at
+                // the current position of the camera. The camera is copied, and the copy's `far` is lowered. This
+                // renders shorter axes on the displayed CameraHelper.
+                const copyCamera = view.camera3D.clone();
+                copyCamera.far = 50;
+                const helper = new itowns.THREE.CameraHelper(copyCamera);
+                helper.updateWorldMatrix(true, false);
+                cameraHelpers.add(helper);
+                view.notifyChange();
+            }
+
+            function animateCamera() {
+                if (!travelOn) {  // If travel is off, begin travel
+                    travelOn = true;
+                    return itowns.CameraUtils.sequenceAnimationsToLookAtTarget(
+                        view,
+                        view.camera3D,
+                        travelSteps,
+                    ).then(() => { travelOn = false; });
+                }
+
+                itowns.CameraUtils.stop(view, view.camera3D);  // If travel is on, interrupt it
+            }
+
+            // Listens for user input :
+            window.addEventListener('keypress', async function (event) {
+                // If user presses `p` (for 'pick:'), saves the current camera position, heading, tilt...
+                if (event.key === 'p') { saveCurrentCameraTransformOptions(); }
+                // If user presses `t` (for 'travel'), switches travelling mode on or off.
+                else if (event.key === 't') { animateCamera(); }
+                // If user presses `c` (for 'clear'), removes all the picked position from lists.
+                else if (event.key ==='c') {
+                    travelSteps = [];
+                    cameraHelpers.clear();
+                    view.notifyChange();
+                }
+            })
+	  
+            // Create a new Layer 3d-tiles For Viewer Request Volume
+            // -----------------------------------------------------
+
+            // var $3dTilesLayerRequestVolume = new itowns.C3DTilesLayer('3d-tiles-request-volume', {
+            //     name: 'RequestVolume',
+            //     source: new itowns.C3DTilesSource({
+            //         url: 'https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/master/1.0/TilesetWithRequestVolume/tileset.json',
+            //     }),
+            //     sseThreshold: 1,
+            // }, view);
+
+            // add an event for picking the 3D Tiles layer and displaying
+            // information about the picked feature in an html div
+            var pickingArgs = {};
+            pickingArgs.htmlDiv = document.getElementById('featureInfo');
+            pickingArgs.view = view;
+            // pickingArgs.layer = $3dTilesLayerRequestVolume;
+            // itowns.View.prototype.addLayer.call(view,
+            //     $3dTilesLayerRequestVolume).then(function _() {
+            //         window.addEventListener('mousemove',
+            //             (event) => fillHTMLWithPickingInfo(event, pickingArgs),false);
+            //     });
+
+            // Add the UI Debug
+            var d = new debug.Debug(view, menuGlobe.gui);
+            debug.createTileDebugUI(menuGlobe.gui, view, view.tileLayer, d);
+            debug.create3dTilesDebugUI(menuGlobe.gui, view, $3dTilesLayerDiscreteLOD);
+//            debug.create3dTilesDebugUI(menuGlobe.gui, view, $3dTilesLayerRequestVolume);
+            d.zoom = function() {
+                view.camera3D.position.set(1215013.9, -4736315.5, 4081597.5);
+                view.camera3D.quaternion.set(0.9108514448729665, 0.13456816437801225, 0.1107206134840362, 0.3741416847378546);
+                view.notifyChange(view.camera3D);
+            }
+            menuGlobe.gui.add(d, 'zoom').name('Go to point cloud');
+        </script>
+    </body>
+</html>
